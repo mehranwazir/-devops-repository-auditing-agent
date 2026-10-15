@@ -1,0 +1,25 @@
+{
+  "repository": "local-fixture://obvious",
+  "violations": [
+    {
+      "rule_id": "CI-001",
+      "category": "ci",
+      "severity": "medium",
+      "file": ".github/workflows/ci.yml",
+      "line": 17,
+      "description": "Test failures are ignored by continue-on-error in CI workflow",
+      "evidence": "continue-on-error: true on the pytest test step in .github/workflows/ci.yml",
+      "recommendation": "Remove continue-on-error: true so that test failures correctly fail the CI pipeline."
+    },
+    {
+      "rule_id": "CFG-001",
+      "category": "configuration",
+      "severity": "low",
+      "file": "src/arithmetic.py",
+      "line": 2,
+      "description": "Hardcoded machine-specific absolute path in source code",
+      "evidence": "LOG_PATH = \"/Users/alice/Desktop/prod-app/logs/service.log\" in src/arithmetic.py",
+      "recommendation": "Use configurable paths, environment variables, or temporary directories instead of hardcoded user-specific paths."
+    }
+  ]
+}

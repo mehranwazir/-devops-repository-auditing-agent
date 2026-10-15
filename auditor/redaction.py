@@ -20,7 +20,8 @@ class Redactor:
             re.compile(r"(?i)(https?://)[^\s/@]+:[^\s/@]+@"),
         ]
         self.assignment = re.compile(
-            r"""(?im)((?:[\w.-]*(?:password|passwd|secret|token|api[_-]?key|access[_-]?key)[\w.-]*)["']?\s*[:=]\s*)([^\r\n]+)"""
+            r"""(?im)((?:[\w.-]*(?:password|passwd|secret|token|api[_-]?key|access[_-]?key)"""
+            r"""[\w.-]*)["']?[ \t]*[:=][ \t]*)([^\r\n]+)"""
         )
 
     def text(self, value):
@@ -29,6 +30,47 @@ class Redactor:
         for pattern in self.patterns:
             value = pattern.sub(lambda m: "[REDACTED]" + "\n" * m[0].count("\n"), value)
         return self.assignment.sub(r"\1[REDACTED]", value)
+
+    def source(self, value):
+        """Return safe text and non-secret context for redactions, preserving source lines."""
+        signals = set()
+        for pattern in self.patterns:
+            for match in pattern.finditer(value):
+                signals.add((value.count("\n", 0, match.start()) + 1, "credential_format"))
+        for match in self.assignment.finditer(value):
+            raw = match[2].strip().strip("\"'")
+            lowered = raw.casefold()
+            if any(
+                term in lowered
+                for term in (
+                    "os.environ",
+                    "os.getenv",
+                    "process.env",
+                    "${",
+                    "getenv(",
+                    "secrets.",
+                )
+            ):
+                kind = "environment_reference"
+            elif not raw or any(
+                term in lowered
+                for term in (
+                    "your_key",
+                    "your-key",
+                    "replace",
+                    "placeholder",
+                    "example",
+                    "dummy",
+                    "changeme",
+                )
+            ):
+                kind = "placeholder"
+            elif lowered in {"true", "false", "none", "null"} or raw.isdecimal():
+                continue
+            else:
+                kind = "sensitive_assignment"
+            signals.add((value.count("\n", 0, match.start()) + 1, kind))
+        return self.text(value), [{"line": line, "kind": kind} for line, kind in sorted(signals)]
 
     def clean(self, value):
         if isinstance(value, str):

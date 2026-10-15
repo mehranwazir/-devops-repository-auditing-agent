@@ -3,6 +3,7 @@
 import fnmatch
 from collections import OrderedDict
 
+from auditor.dto import INSPECTION_AREAS
 from auditor.errors import ToolError
 from auditor.redaction import Redactor
 from auditor.repository import run_git
@@ -28,6 +29,7 @@ class RepositoryTools:
         self.tree = []
         self.blobs = {}
         self._line_cache = OrderedDict()
+        self._source_signals = {}
         data = run_git(["ls-tree", "-r", "-z", "--full-tree", "HEAD"], repository)
         for record in data.split(b"\0"):
             if not record:
@@ -62,10 +64,13 @@ class RepositoryTools:
         if b"\0" in raw:
             raise ToolError("Binary file cannot be inspected as text.")
         try:
-            lines = self.redactor.text(raw.decode("utf-8-sig")).splitlines()
+            safe_text, signals = self.redactor.source(raw.decode("utf-8-sig"))
+            lines = safe_text.splitlines()
+            self._source_signals[path] = signals
             self._line_cache[path] = lines
             if len(self._line_cache) > 64:
-                self._line_cache.popitem(last=False)
+                evicted, _ = self._line_cache.popitem(last=False)
+                self._source_signals.pop(evicted, None)
             return lines
         except UnicodeDecodeError:
             raise ToolError("File is not UTF-8 text.") from None
@@ -116,20 +121,25 @@ class RepositoryTools:
             "lines": page,
             "total_lines": len(lines),
             "next_line": end + 1 if end < len(lines) else None,
+            "redactions": [
+                item
+                for item in self._source_signals.get(path, [])
+                if start_line <= item["line"] <= end
+            ],
         }
 
-    def search_code(self, pattern, glob="*", offset=0, limit=40):
-        """Case-insensitive literal substring search, with a file page cursor."""
+    def search_code(self, pattern, glob="*", offset=0, limit=40, start_line=1):
+        """Literal case-insensitive search; resume using next_offset AND next_start_line."""
         if not isinstance(pattern, str) or not 1 <= len(pattern) <= 200:
             raise ToolError("pattern must be a literal string of 1 to 200 characters.")
         if not isinstance(glob, str) or len(glob) > 200:
             raise ToolError("glob must be a string up to 200 characters.")
         bounded_integer(offset, "offset", 0, MAX_FILES)
         bounded_integer(limit, "limit", 1, 100)
+        bounded_integer(start_line, "start_line", 1, 1_000_000)
         paths = sorted(path for path in self.blobs if fnmatch.fnmatchcase(path, glob))
         matches, skipped = [], []
         cursor = offset
-        # Finish a file even if match limit is reached, return only bounded snippets.
         for path in paths[offset : offset + 100]:
             cursor += 1
             try:
@@ -138,18 +148,37 @@ class RepositoryTools:
                 skipped.append({"path": path, "reason": str(exc)})
                 continue
             for number, text in enumerate(lines, 1):
+                if cursor == offset + 1 and number < start_line:
+                    continue
                 if pattern.casefold() in text.casefold():
-                    matches.append({"path": path, "line": number, "text": text[:500]})
+                    position = text.casefold().find(pattern.casefold())
+                    column = max(0, position - 100)
+                    matches.append(
+                        {
+                            "path": path,
+                            "line": number,
+                            "text": text[column : column + 500],
+                            "column_start": column + 1,
+                            "snippet_truncated": len(text) > 500,
+                            "redactions": [
+                                item
+                                for item in self._source_signals.get(path, [])
+                                if item["line"] == number
+                            ],
+                        }
+                    )
                     self.observed_lines.setdefault(path, set()).add(number)
                     if len(matches) >= limit:
-                        # Revisit this file with read_file to inspect any additional matches.
+                        within_file = number < len(lines)
+                        next_file = cursor - 1 if within_file else cursor
                         self.successful_tools.add("search_code")
                         return self.redactor.clean(
                             {
                                 "matches": matches,
                                 "skipped": skipped,
-                                "next_offset": cursor - 1,
-                                "truncated_within_file": True,
+                                "next_offset": next_file if next_file < len(paths) else None,
+                                "next_start_line": number + 1 if within_file else 1,
+                                "truncated_within_file": within_file,
                                 "total_files": len(paths),
                             }
                         )
@@ -159,6 +188,7 @@ class RepositoryTools:
                 "matches": matches,
                 "skipped": skipped,
                 "next_offset": cursor if cursor < len(paths) else None,
+                "next_start_line": 1,
                 "truncated_within_file": False,
                 "total_files": len(paths),
             }
@@ -229,6 +259,15 @@ VIOLATION_SCHEMA = object_schema(
         "recommendation": STRING,
     }
 )
+ASSESSMENT_SCHEMA = object_schema(
+    {
+        "area": {"type": "string", "enum": list(INSPECTION_AREAS)},
+        "status": {"type": "string", "enum": ["assessed", "not_applicable", "unavailable"]},
+        "explanation": STRING,
+        "file": {"type": ["string", "null"]},
+        "line": {"type": ["integer", "null"]},
+    }
+)
 TOOL_SCHEMAS = [
     {
         "name": "list_files",
@@ -244,7 +283,13 @@ TOOL_SCHEMAS = [
         "name": "search_code",
         "description": RepositoryTools.search_code.__doc__,
         "parameters": object_schema(
-            {"pattern": STRING, "glob": STRING, "offset": INTEGER, "limit": INTEGER}
+            {
+                "pattern": STRING,
+                "glob": STRING,
+                "offset": INTEGER,
+                "limit": INTEGER,
+                "start_line": INTEGER,
+            }
         ),
     },
     {
@@ -256,6 +301,11 @@ TOOL_SCHEMAS = [
         "name": "submit_report",
         "description": "Finish after interpreting evidence and checking "
         "alternatives. An empty violations array is valid for a healthy repository.",
-        "parameters": object_schema({"violations": {"type": "array", "items": VIOLATION_SCHEMA}}),
+        "parameters": object_schema(
+            {
+                "violations": {"type": "array", "items": VIOLATION_SCHEMA},
+                "assessment": {"type": "array", "items": ASSESSMENT_SCHEMA},
+            }
+        ),
     },
 ]

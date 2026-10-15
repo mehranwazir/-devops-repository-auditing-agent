@@ -1,0 +1,37 @@
+{
+  "timestamp": "2026-10-15T23:45:49.336531+00:00",
+  "model": "gemini-3.5-flash-lite",
+  "scope": "Local synthetic fixtures; expected defects require manual semantic comparison. These are not public target audits or hidden-repository precision/recall scores.",
+  "results": [
+    {
+      "case": "obvious",
+      "status": "completed",
+      "expected_defects": [
+        "Test step has continue-on-error: true, so failing tests do not gate CI.",
+        "Production logging uses a developer-specific absolute path in src/arithmetic.py."
+      ],
+      "reported_count": 2,
+      "report": "obvious_report.json",
+      "trace": "obvious_trace.jsonl"
+    },
+    {
+      "case": "subtle",
+      "status": "completed",
+      "expected_defects": [
+        "pull_request_target checks out contributor code and executes its build script with contents: write and persisted checkout credentials.",
+        "The only workflow does not invoke existing tests on push or pull_request."
+      ],
+      "reported_count": 2,
+      "report": "subtle_report.json",
+      "trace": "subtle_trace.jsonl"
+    },
+    {
+      "case": "healthy",
+      "status": "completed",
+      "expected_defects": [],
+      "reported_count": 0,
+      "report": "healthy_report.json",
+      "trace": "healthy_trace.jsonl"
+    }
+  ]
+}

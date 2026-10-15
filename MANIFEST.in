@@ -2,4 +2,5 @@ include README.md requirements.txt .env.example
 recursive-include tests *.py
 recursive-include .github *.yml
 include sample_report.json sample_trace.jsonl
+recursive-include validation *.json *.jsonl
 exclude .env

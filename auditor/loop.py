@@ -3,9 +3,10 @@
 import json
 from datetime import UTC, datetime
 
+from auditor.dto import AuditReportDTO, ToolCallDTO, ViolationDTO
 from auditor.errors import AuditError, ToolError
 from auditor.prompts import SYSTEM_PROMPT
-from auditor.report import validate_findings
+from auditor.report import validate_assessment, validate_findings
 from tools import TOOL_SCHEMAS
 
 
@@ -34,7 +35,7 @@ class AuditAgent:
                 "parts": [
                     {
                         "text": (
-                            f"Audit public repository {url} at commit {self.tools.commit}. "
+                            f"Audit repository {url} at commit {self.tools.commit}. "
                             f"Budget: {self.max_turns} model turns; "
                             f"{self.max_calls} tool calls. "
                             "Discover the repository, follow evidence, "
@@ -71,11 +72,8 @@ class AuditAgent:
             responses = []
             for call in requests:
                 self.calls += 1
-                if not isinstance(call, dict):
-                    raise AuditError("Provider returned a malformed function call.")
-                name, arguments = call.get("name", ""), call.get("args", {})
-                if not isinstance(name, str) or not name:
-                    raise AuditError("Provider returned an invalid function name.")
+                dto = ToolCallDTO.from_mapping(call)
+                name, arguments = dto.name, dto.arguments
                 self.event("tool_call", turn=turn, name=name, arguments=arguments)
                 try:
                     if name == "submit_report":
@@ -83,9 +81,27 @@ class AuditAgent:
                             raise ToolError(
                                 "Submit the report alone, after interpreting other results."
                             )
-                        findings = validate_findings(arguments, self.tools)
-                        report = {"repository": url, "violations": findings}
-                        self.event("complete", report=report, tool_calls=self.calls, turns=turn)
+                        if not isinstance(arguments, dict) or set(arguments) != {
+                            "violations",
+                            "assessment",
+                        }:
+                            raise ToolError(
+                                "submit_report needs violations and a nine-area assessment."
+                            )
+                        assessment = validate_assessment(arguments["assessment"], self.tools)
+                        findings = validate_findings(
+                            {"violations": arguments["violations"]}, self.tools
+                        )
+                        report = AuditReportDTO(
+                            url, tuple(ViolationDTO.from_mapping(f) for f in findings)
+                        ).to_dict()
+                        self.event(
+                            "complete",
+                            report=report,
+                            assessment=assessment,
+                            tool_calls=self.calls,
+                            turns=turn,
+                        )
                         return report
                     result = self.tools.dispatch(name, arguments)
                 except ToolError as exc:
@@ -93,8 +109,8 @@ class AuditAgent:
                 result = self.tools.redactor.clean(result)
                 self.event("tool_result", turn=turn, name=name, result=result)
                 response = {"name": name, "response": {"result": result}}
-                if "id" in call:
-                    response["id"] = call["id"]
+                if dto.call_id is not None:
+                    response["id"] = dto.call_id
                 responses.append({"functionResponse": response})
             history.append({"role": "user", "parts": responses})
         raise AuditError("Model-turn budget exhausted; no completed report was written.")

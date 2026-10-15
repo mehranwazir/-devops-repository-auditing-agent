@@ -37,3 +37,28 @@ def test_failed_clone_cleans_temporary_directory_and_never_yields(monkeypatch):
         with repository.clone_repository("https://github.com/example/demo"):
             pytest.fail("Failed clones must not be inspected")
     assert locations and not locations[0].exists()
+
+
+def test_git_does_not_execute_a_repository_hook(make_repo):
+    tools, _ = make_repo({"README.md": "A library\n"})
+    marker = tools.repository / "hook-ran"
+    hook = tools.repository / ".git" / "hooks" / "post-commit"
+    hook.parent.mkdir(exist_ok=True)
+    hook.write_text("#!/bin/sh\nprintf unsafe > hook-ran\n", encoding="utf-8")
+    hook.chmod(0o755)
+    repository.run_git(
+        [
+            "-c",
+            "user.name=Tests",
+            "-c",
+            "user.email=tests@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "hook safety",
+        ],
+        tools.repository,
+    )
+    assert not marker.exists()

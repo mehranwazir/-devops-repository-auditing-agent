@@ -17,7 +17,7 @@ dev = ["pytest>=8.3,<10", "ruff>=0.11,<1", "build>=1.2,<2"]
 devops-audit = "agent:main"
 
 [tool.setuptools]
-py-modules = ["agent", "tools"]
+py-modules = ["agent", "tools", "evaluate"]
 packages = ["auditor"]
 
 [tool.pytest.ini_options]

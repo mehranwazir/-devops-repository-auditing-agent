@@ -4,9 +4,10 @@ import json
 import pytest
 from conftest import model_call
 
+from auditor.dto import INSPECTION_AREAS
 from auditor.errors import AuditError, ToolError
 from auditor.loop import AuditAgent
-from auditor.report import atomic_json, validate_findings
+from auditor.report import atomic_json, validate_assessment, validate_findings
 
 URL = "https://github.com/example/demo"
 
@@ -168,3 +169,48 @@ def test_atomic_report_written_as_valid_json(tmp_path):
     path = tmp_path / "report.json"
     atomic_json(path, {"repository": URL, "violations": []})
     assert json.loads(path.read_text())["violations"] == []
+
+
+def assessment_rows():
+    return [
+        {
+            "area": area,
+            "status": "unavailable",
+            "file": None,
+            "line": None,
+            "explanation": "This area was not checked in the focused test fixture.",
+        }
+        for area in INSPECTION_AREAS
+    ]
+
+
+def test_incomplete_area_review_is_returned_to_model_for_correction(make_repo):
+    tools, _ = make_repo({"ci.yml": "run: pytest\n"})
+    provider = ScriptedProvider(
+        discovery()
+        + [
+            model_call("submit_report", violations=[], assessment=[]),
+            model_call("submit_report", violations=[], assessment=assessment_rows()),
+        ]
+    )
+    trace = io.StringIO()
+    assert AuditAgent(provider, tools, trace=trace).run(URL)["violations"] == []
+    completion = json.loads(trace.getvalue().splitlines()[-1])
+    assert len(completion["assessment"]) == 9
+    assert "nine inspection areas" in json.dumps(provider.histories[-1][-1])
+
+
+@pytest.mark.parametrize("change", ["duplicate", "unread_file", "unobserved_line"])
+def test_area_review_rejects_missing_or_unsupported_evidence(make_repo, change):
+    tools, _ = make_repo({"ci.yml": "run: pytest\n"})
+    tools.list_files()
+    tools.read_file("ci.yml")
+    rows = assessment_rows()
+    if change == "duplicate":
+        rows[-1] = dict(rows[0])
+    elif change == "unread_file":
+        rows[0]["file"] = "not-inspected.yml"
+    else:
+        rows[0].update(file="ci.yml", line=99)
+    with pytest.raises(ToolError):
+        validate_assessment(rows, tools)

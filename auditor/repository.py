@@ -47,7 +47,7 @@ def run_git(args, cwd, timeout=30, max_bytes=8_000_000):
     executable = shutil.which("git")
     if not executable:
         raise AuditError("Git is missing. Install Git and put it on PATH.")
-    command = [executable, "-c", "core.hooksPath=", "-c", "credential.helper=", *args]
+    command = [executable, "-c", f"core.hooksPath={os.devnull}", "-c", "credential.helper=", *args]
     try:
         with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
             with subprocess.Popen(

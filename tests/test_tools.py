@@ -50,6 +50,43 @@ def test_search_bound_reports_cursor(make_repo):
     assert result["next_offset"] == 0
 
 
+def test_search_resumes_inside_file_without_repeating_or_losing_matches(make_repo):
+    tools, _ = make_repo({"a.txt": "hit\nhit\n", "b.txt": "hit\n"})
+    cursor, line, matches = 0, 1, []
+    for _ in range(5):
+        page = tools.search_code("hit", offset=cursor, start_line=line, limit=1)
+        matches.extend((match["path"], match["line"]) for match in page["matches"])
+        cursor, line = page["next_offset"], page["next_start_line"]
+        if cursor is None:
+            break
+    assert cursor is None
+    assert matches == [("a.txt", 1), ("a.txt", 2), ("b.txt", 1)]
+
+
+def test_long_search_line_shows_the_match_in_its_snippet(make_repo):
+    tools, _ = make_repo({"a.txt": "prefix " + "x" * 1000 + " continue-on-error: true\n"})
+    result = tools.search_code("continue-on-error")["matches"][0]
+    assert "continue-on-error" in result["text"]
+    assert result["column_start"] > 1 and result["snippet_truncated"]
+
+
+def test_redaction_metadata_distinguishes_references_from_credential_shapes(make_repo):
+    secret = "ghp_" + "Z" * 36
+    source = f'API_KEY=os.getenv("KEY")\nPASSWORD="changeme"\nTOKEN="{secret}"\n'
+    tools, _ = make_repo({"config.py": source})
+    result = tools.read_file("config.py")
+    kinds = {(signal["line"], signal["kind"]) for signal in result["redactions"]}
+    assert (1, "environment_reference") in kinds
+    assert (2, "placeholder") in kinds
+    assert (3, "credential_format") in kinds
+    assert secret not in json.dumps(result)
+
+
+def test_redaction_does_not_consume_next_line_after_empty_assignment():
+    safe, _ = Redactor().source("API_KEY=\nGEMINI_MODEL=model-name\n")
+    assert "GEMINI_MODEL=model-name" in safe
+
+
 @pytest.mark.parametrize("args", [{"limit": True}, {"offset": -1}, {"limit": 501}])
 def test_tool_bounds(make_repo, args):
     tools, _ = make_repo({})

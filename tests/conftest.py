@@ -2,6 +2,7 @@ import subprocess
 
 import pytest
 
+from auditor.dto import INSPECTION_AREAS
 from auditor.repository import git_environment
 from tools import RepositoryTools
 
@@ -53,4 +54,16 @@ def make_repo(tmp_path):
 
 
 def model_call(name, **arguments):
+    if name == "submit_report" and "assessment" not in arguments:
+        # Unit-test fixtures exercise focused behavior, not a complete semantic audit.
+        arguments["assessment"] = [
+            {
+                "area": area,
+                "status": "unavailable",
+                "explanation": "This focused unit test does not assess this DevOps area.",
+                "file": None,
+                "line": None,
+            }
+            for area in INSPECTION_AREAS
+        ]
     return {"role": "model", "parts": [{"functionCall": {"name": name, "args": arguments}}]}

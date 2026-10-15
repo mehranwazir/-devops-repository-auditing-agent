@@ -2,22 +2,34 @@
 
 import json
 import os
-import re
 import tempfile
 from pathlib import Path
 
+from auditor.dto import INSPECTION_AREAS, SEVERITY_RANK, AreaAssessmentDTO, ViolationDTO
 from auditor.errors import ToolError
 
-FIELDS = {
-    "rule_id",
-    "category",
-    "severity",
-    "file",
-    "line",
-    "description",
-    "evidence",
-    "recommendation",
-}
+
+def validate_assessment(value, tools):
+    if not isinstance(value, list) or len(value) != len(INSPECTION_AREAS):
+        raise ToolError("Before submitting, assess all nine inspection areas exactly once.")
+    areas = [AreaAssessmentDTO.from_mapping(item) for item in value]
+    if {area.area for area in areas} != set(INSPECTION_AREAS):
+        raise ToolError("Assessment has missing or duplicate inspection areas.")
+    for area in areas:
+        if (
+            area.file is not None
+            and area.file not in tools.read_paths | tools.observed_lines.keys()
+        ):
+            raise ToolError("Assessment cites a file that has not been inspected.")
+        if area.line is not None and area.line not in tools.observed_lines.get(area.file, set()):
+            raise ToolError("Assessment cites a line that has not been observed.")
+        if (
+            area.file is None
+            and area.status == "assessed"
+            and len(tools.listed_paths) != len(tools.tree)
+        ):
+            raise ToolError("A repository-wide assessment requires complete file discovery.")
+    return [tools.redactor.clean(area.to_dict()) for area in areas]
 
 
 def validate_findings(arguments, tools):
@@ -32,21 +44,9 @@ def validate_findings(arguments, tools):
         raise ToolError("Read source/configuration and interpret it before submitting.")
     result, seen = [], set()
     for finding in findings:
-        if not isinstance(finding, dict) or set(finding) != FIELDS:
-            raise ToolError("Every violation must contain exactly the required eight fields.")
-        for name in FIELDS - {"file", "line"}:
-            if not isinstance(finding[name], str) or not finding[name].strip():
-                raise ToolError(f"{name} must be a nonempty string.")
-            if len(finding[name]) > 6000:
-                raise ToolError(f"{name} exceeds the 6000-character limit.")
-        if not re.fullmatch(r"[A-Z][A-Z0-9-]*-\d{3}", finding["rule_id"]):
-            raise ToolError("rule_id must be a stable code such as SEC-001 or CI-001.")
-        if finding["severity"] not in {"critical", "high", "medium", "low"}:
-            raise ToolError("severity must be critical, high, medium, or low.")
-        path, line = finding["file"], finding["line"]
+        dto = ViolationDTO.from_mapping(finding)
+        path, line = dto.file, dto.line
         if path is None:
-            if line is not None:
-                raise ToolError("A null file requires a null line.")
             if len(tools.listed_paths) != len(tools.tree):
                 raise ToolError(
                     "Paginate all tracked files before reporting a repository-wide absence."
@@ -59,12 +59,13 @@ def validate_findings(arguments, tools):
             type(line) is not int or line not in tools.observed_lines.get(path, set())
         ):
             raise ToolError("The finding cites a line that has not been observed.")
-        key = (finding["rule_id"], path, line)
+        key = (dto.rule_id, path, line)
         if key not in seen:
             seen.add(key)
-            result.append(tools.redactor.clean(finding))
-    rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    return sorted(result, key=lambda f: (rank[f["severity"]], f["file"] or "", f["line"] or 0))
+            result.append(ViolationDTO.from_mapping(tools.redactor.clean(dto.to_dict())).to_dict())
+    return sorted(
+        result, key=lambda f: (SEVERITY_RANK[f["severity"]], f["file"] or "", f["line"] or 0)
+    )
 
 
 def atomic_json(path, report):
