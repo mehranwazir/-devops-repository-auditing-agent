@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.log
+*.egg-info/
+.env
+.env.*
+!.env.example
+report.json
+trace.jsonl
+tmp/
+Assignment_2_*.pdf

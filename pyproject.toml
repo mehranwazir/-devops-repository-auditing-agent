@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=75,<83"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devops-repository-auditing-agent"
+version = "1.0.0"
+description = "An explicit LLM-directed, read-only GitHub DevOps auditing agent"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3,<10", "ruff>=0.11,<1", "build>=1.2,<2"]
+
+[project.scripts]
+devops-audit = "agent:main"
+
+[tool.setuptools]
+py-modules = ["agent", "tools"]
+packages = ["auditor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
